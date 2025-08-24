@@ -1,4 +1,12 @@
-module DSP_SLICE #( parameter width_one = 18 , width_two = 36 , width_three = 48 , RSTTYPE = 1'b0)
+module DSP_SLICE #( 
+        parameter width_one = 18 , width_two = 36 , width_three = 48 , RSTTYPE = 1'b0,
+        parameter A0REG = 1'b1 , A1REG = 1'b1 , // for deciding either registered or not for input A
+        parameter B0REG = 1'b1 , B1REG = 1'b1 , // for deciding either registered or not for input B
+        parameter B_INPUT = 1'b0 ,              // for deciding either input B comes from cascading or from normal logic
+        parameter CREG = 1'b1   ,             // for deciding either registered or not for input C
+        parameter DREG = 1'b1   ,             // for deciding either registered or not for input D
+        parameter MREG = 1'b1                 // for deciding either registered or not for multiplier output
+)
 (
     // Data Input Ports
     input wire [width_one-1:0] A, B, D, 
@@ -22,54 +30,40 @@ module DSP_SLICE #( parameter width_one = 18 , width_two = 36 , width_three = 48
     output wire [width_three-1:0] PCOUT
 );
 
-//attributes
-parameter A0REG = 1'b1 , A1REG = 1'b1 ; // for deciding either registered or not for input A
-parameter B0REG = 1'b1 , B1REG = 1'b1 ; // for deciding either registered or not for input B
-parameter B_INPUT = 1'b0 ;              // for deciding either input B comes from cascading or from normal logic
-parameter CREG = 1'b1   ;             // for deciding either registered or not for input C
-parameter DREG = 1'b1   ;             // for deciding either registered or not for input D
 //internal wires
-wire [width_one-1 : 0] a0_reg , a0_out , a1_reg , a1_out ;
-wire [width_one-1 : 0] bout_mux , b0_out , b0_reg , b1_reg , b1_out , b_opmode4 ;
-wire [width_three-1 : 0]  c_reg , c_out ;
-wire [width_one-1 : 0]    d_reg , d_out ;
+wire signed [width_one-1 : 0] a0_reg , a0_out , a1_reg , a1_out ;
+wire signed [width_one-1 : 0] bout_mux , b0_out , b0_reg , b1_reg , b1_out , b_opmode4 ;
+wire signed [width_three-1 : 0]  c_reg , c_out ;
+wire signed [width_one-1 : 0]    d_reg , d_out ;
+wire signed [width_one-1 : 0]  mult_in_a, mult_in_b;
+wire signed [width_two-1 : 0]  mult_out;
+wire signed [width_one-1 : 0]  preAdd_in_b, preAdd_in_d, preAdd_out;
+wire signed [width_three-1 : 0]  postAdd_X, postAdd_Z, postAdd_out;
+wire CIN;
 // Instantiations
 // A : 18-bit data input to the DSP multiplier
 //     Can also be used as an input to the post-adder/subtracter by concatenation with B and D
 //     depending on the value of OPMODE[1:0]
-
   
-rst_type  #(.reg_size(width_one) , 
+pipeline_reg  #(.reg_size(width_one) , 
             .RSTTYPE(RSTTYPE) )
         
-        rst_a0 (.D_in(A) , 
+        a0 (.D_in(A) ,
+                .SEL(A0REG) ,
                 .CLK(CLK) , 
                 .RST(RSTA) , 
                 .CE(CEA) , 
-                .Q(a0_reg)) ;
-
-mux_2_1 #(.width(width_one)) 
-
-        mux_a0 (.in0(A) , 
-                .in1(a0_reg) , 
-                .sel(A0REG) , 
-                .out(a0_out)) ;   
-
-rst_type  #(.reg_size(width_one) , 
+                .D_out(a0_out)) ;
+  
+pipeline_reg  #(.reg_size(width_one) , 
             .RSTTYPE(RSTTYPE) )
         
-        rst_a1 (.D_in(a0_out) , 
+        a1 (.D_in(a0_out) , 
+                .SEL(A1REG) ,
                 .CLK(CLK) , 
                 .RST(RSTA) , 
                 .CE(CEA) , 
-                .Q(a1_reg)) ; 
-
-mux_2_1 #(.width(width_one)) 
-
-        mux_a1 (.in0(a0_out) , 
-                .in1(a1_reg) , 
-                .sel(A1REG) , 
-                .out(a1_out)) ;    
+                .D_out(mult_in_a)) ; 
 
 // B : 18-bit data input
 //     - Can be used as input to the pre-adder/subtracter
@@ -78,64 +72,56 @@ mux_2_1 #(.width(width_one))
 //     - Supports cascading: when BCOUT from an adjacent DSP48A1 slice is used,
 //       tools map it to BCIN and configure the B_INPUT attribute
 
-mux_2_1 #(.width(width_one)) 
+assign bout_mux = (B_INPUT) ? BCIN : B;
 
-        mux_in_b (.in0(B) , 
-                  .in1(BCIN) , 
-                  .sel(B_INPUT) , 
-                  .out(bout_mux)) ;  
-
-rst_type  #(.reg_size(width_one) , 
+pipeline_reg  #(.reg_size(width_one) , 
             .RSTTYPE(RSTTYPE) )
         
-        rst_b0 (.D_in(bout_mux) , 
+        b0 (.D_in(bout_mux) , 
+                .SEL(B0REG) ,
                 .CLK(CLK) , 
                 .RST(RSTB) , 
                 .CE(CEB) , 
-                .Q(b0_reg)) ;  
+                .D_out(preAdd_in_b)) ;  
 
-mux_2_1 #(.width(width_one)) 
+assign preAdd_out = (OPMODE[6]) ? (preAdd_in_d - preAdd_in_b) : (preAdd_in_d + preAdd_in_b) ;
 
-        mux_b0 (.in0(bout_mux) , 
-                .in1(b0_reg) , 
-                .sel(B0REG) , 
-                .out(b0_out)) ;   
+assign b_opmode4 = (OPMODE[4]) ? preAdd_out : preAdd_in_b;
 
-rst_type  #(.reg_size(width_one) , 
+pipeline_reg  #(.reg_size(width_one) , 
             .RSTTYPE(RSTTYPE) )
-        
-        rst_b1 (.D_in(b_opmode4) , 
+
+        b1 (.D_in(b_opmode4) , 
+                .SEL(B1REG) ,
                 .CLK(CLK) , 
                 .RST(RSTB) , 
                 .CE(CEB) , 
-                .Q(b1_reg)) ;  
-
-mux_2_1 #(.width(width_one)) 
-
-        mux_b1 (.in0(b_opmode4) , 
-                .in1(b1_reg) , 
-                .sel(B1REG) , 
-                .out(b1_out)) ;   
-
+                .D_out(mult_in_b)) ;  
 
 // C : 48-bit data input
 //     -Can be used as input to the post-adder/subtracter
 
-rst_type  #(.reg_size(width_three) , 
+pipeline_reg  #(.reg_size(width_three) , 
             .RSTTYPE(RSTTYPE) )
         
-        rst_c (.D_in(C) , 
+        c (.D_in(C) , 
+               .SEL(CREG) ,
                .CLK(CLK) , 
                .RST(RSTC) , 
                .CE(CEC) , 
-               .Q(c_reg)) ;  
+               .D_out(c_out)) ;  
 
-mux_2_1 #(.width(width_three)) 
+assign mult_out = mult_in_a * mult_in_b ;
 
-        mux_c (.in0(C) , 
-               .in1(c_reg) , 
-               .sel(CREG) , 
-               .out(c_out)) ;
+pipeline_reg  #(.reg_size(width_two) , 
+            .RSTTYPE(RSTTYPE) )
+        
+        mult_result (.D_in(mult_out) ,
+               .SEL(MREG) ,
+               .CLK(CLK) ,
+               .RST(RSTM) ,
+               .CE(CEM) ,
+               .D_out(M)) ;
 
 // D : 18-bit data input
 //     Functions:
@@ -144,21 +130,44 @@ mux_2_1 #(.width(width_three))
 //         → this concatenated value can optionally be sent to the post-adder/subtracter
 //           depending on OPMODE[1:0]
 
-rst_type  #(.reg_size(width_one) , 
+pipeline_reg  #(.reg_size(width_one) , 
             .RSTTYPE(RSTTYPE) )
         
-        rst_d (.D_in(D) , 
-               .CLK(CLK) , 
-               .RST(RSTD) , 
-               .CE(CED) , 
-               .Q(d_reg)) ;  
+        d (.D_in(D) ,
+               .SEL(DREG) ,
+               .CLK(CLK) ,
+               .RST(RSTD) ,
+               .CE(CED) ,
+               .D_out(d_reg)) ;
 
-mux_2_1 #(.width(width_one)) 
+mux_4_1 #(.width(width_three)) 
 
-        mux_d (.in0(D) , 
-               .in1(d_reg) , 
-               .sel(DREG) , 
-               .out(d_out)) ;
+        X (.in0(0) , 
+               .in1({ {12{M[35]}}, M } ) , 
+               .in2({D[11:0],B[17:0],A[17:0]}) , 
+               .in3(p) , 
+               .sel(OPMODE[1:0]) , 
+               .out(postAdd_X)) ;
 
+mux_4_1 #(.width(width_three)) 
+
+        Z (.in0(0) , 
+               .in1(PCIN) , 
+               .in2(P) , 
+               .in3(C) , 
+               .sel(OPMODE[3:2]) , 
+               .out(postAdd_Z)) ;
+
+assign postAdd_out = (OPMODE[7]) ? (postAdd_Z - (postAdd_X + CIN)) : (postAdd_Z + postAdd_X);
+
+pipeline_reg  #(.reg_size(width_three) , 
+            .RSTTYPE(RSTTYPE) )
+
+        postAdd_result (.D_in(postAdd_out) ,
+               .SEL(DREG) ,
+               .CLK(CLK) ,
+               .RST(RSTD) ,
+               .CE(CED) ,
+               .D_out(P)) ;
 
 endmodule
