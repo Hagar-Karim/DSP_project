@@ -5,7 +5,10 @@ module DSP_SLICE #(
         parameter B_INPUT = 1'b0 ,              // for deciding either input B comes from cascading or from normal logic
         parameter CREG = 1'b1   ,             // for deciding either registered or not for input C
         parameter DREG = 1'b1   ,             // for deciding either registered or not for input D
-        parameter MREG = 1'b1                 // for deciding either registered or not for multiplier output
+        parameter MREG = 1'b1   ,              // for deciding either registered or not for multiplier output
+        parameter CARRYINREG = 1'b1 ,          // for deciding either registered or not for carryin
+        parameter CARRYOUTREG = 1'b1 ,          // for deciding either registered or not for carryout
+        parameter CARRYINSEL =  1'b1
 )
 (
     // Data Input Ports
@@ -31,15 +34,15 @@ module DSP_SLICE #(
 );
 
 //internal wires
-wire signed [width_one-1 : 0] a0_reg , a0_out , a1_reg , a1_out ;
-wire signed [width_one-1 : 0] bout_mux , b0_out , b0_reg , b1_reg , b1_out , b_opmode4 ;
-wire signed [width_three-1 : 0]  c_reg , c_out ;
-wire signed [width_one-1 : 0]    d_reg , d_out ;
-wire signed [width_one-1 : 0]  mult_in_a, mult_in_b;
+wire signed [width_one-1 : 0]  a0_out , mult_in_a ;
+wire signed [width_one-1 : 0] bout_mux ,  preAdd_in_b , mult_in_b , b_opmode4 ;
+wire signed [width_three-1 : 0]  c_out ;
+wire signed [width_one-1 : 0]    d_out , preAdd_in_d ;  
+wire signed [width_two-1 : 0]  m_out;
 wire signed [width_two-1 : 0]  mult_out;
-wire signed [width_one-1 : 0]  preAdd_in_b, preAdd_in_d, preAdd_out;
+wire signed [width_one-1 : 0]   preAdd_out;
 wire signed [width_three-1 : 0]  postAdd_X, postAdd_Z, postAdd_out;
-wire CIN;
+wire CIN , CYI , CYO ;
 // Instantiations
 // A : 18-bit data input to the DSP multiplier
 //     Can also be used as an input to the post-adder/subtracter by concatenation with B and D
@@ -72,7 +75,7 @@ pipeline_reg  #(.reg_size(width_one) ,
 //     - Supports cascading: when BCOUT from an adjacent DSP48A1 slice is used,
 //       tools map it to BCIN and configure the B_INPUT attribute
 
-assign bout_mux = (B_INPUT) ? BCIN : B;
+assign bout_mux = (B_INPUT) ? B : BCIN ;
 
 pipeline_reg  #(.reg_size(width_one) , 
             .RSTTYPE(RSTTYPE) )
@@ -98,6 +101,8 @@ pipeline_reg  #(.reg_size(width_one) ,
                 .CE(CEB) , 
                 .D_out(mult_in_b)) ;  
 
+assign BCOUT = mult_in_b ; // for cascade mode
+
 // C : 48-bit data input
 //     -Can be used as input to the post-adder/subtracter
 
@@ -111,6 +116,9 @@ pipeline_reg  #(.reg_size(width_three) ,
                .CE(CEC) , 
                .D_out(c_out)) ;  
 
+// M output: 36-bit multiplier result (from MREG if enabled, or direct).
+// Note: Don't use M and P outputs together (routing issue).
+
 assign mult_out = mult_in_a * mult_in_b ;
 
 pipeline_reg  #(.reg_size(width_two) , 
@@ -121,8 +129,8 @@ pipeline_reg  #(.reg_size(width_two) ,
                .CLK(CLK) ,
                .RST(RSTM) ,
                .CE(CEM) ,
-               .D_out(M)) ;
-
+               .D_out(m_out)) ;
+assign M = m_out ;
 // D : 18-bit data input
 //     Functions:
 //       • Used as input to the pre-adder/subtracter
@@ -138,14 +146,20 @@ pipeline_reg  #(.reg_size(width_one) ,
                .CLK(CLK) ,
                .RST(RSTD) ,
                .CE(CED) ,
-               .D_out(d_reg)) ;
+               .D_out(d_out)) ;
+
+assign preAdd_in_d = d_out ;
+
+// Post-adder/subtractor stage:
+// Here we select what signals are assigned to X and Z
+// based on the opmode bits. 
 
 mux_4_1 #(.width(width_three)) 
 
-        X (.in0(0) , 
+        X (.in0('b0) , 
                .in1({ {12{M[35]}}, M } ) , 
-               .in2({D[11:0],B[17:0],A[17:0]}) , 
-               .in3(p) , 
+               .in2(P) , 
+               .in3({d_out[11:0],B[17:0],A[17:0]}) , 
                .sel(OPMODE[1:0]) , 
                .out(postAdd_X)) ;
 
@@ -158,7 +172,11 @@ mux_4_1 #(.width(width_three))
                .sel(OPMODE[3:2]) , 
                .out(postAdd_Z)) ;
 
-assign postAdd_out = (OPMODE[7]) ? (postAdd_Z - (postAdd_X + CIN)) : (postAdd_Z + postAdd_X);
+assign postAdd_out = (OPMODE[7]) ? (postAdd_Z - (postAdd_X + CIN)) : (postAdd_Z + postAdd_X + CIN);
+
+// P output: 48-bit post-adder/subtractor result
+// (from PREG if enabled, or direct). 
+// Note: avoid using M and P outputs together.
 
 pipeline_reg  #(.reg_size(width_three) , 
             .RSTTYPE(RSTTYPE) )
@@ -169,5 +187,43 @@ pipeline_reg  #(.reg_size(width_three) ,
                .RST(RSTD) ,
                .CE(CED) ,
                .D_out(P)) ;
+
+assign PCOUT = P ;
+
+// Carry-in control:
+// - OPMODE[5] forces a value on carry input (to CYI reg or direct CIN).
+// - CARRYIN is 1-bit external carry (only from another DSP48A1 CARRYOUT).
+// - Active only when CARRYINSEL = OPMODE[5].
+assign CYI = (CARRYINSEL == OPMODE[5]) ? OPMODE[5] : CARRYIN ;
+
+pipeline_reg  #(.reg_size(1'b1) , 
+                .RSTTYPE(RSTTYPE) )
+
+        postAdd_result (.D_in(CYI) ,
+                        .SEL(CARRYINREG) ,
+                        .CLK(CLK) ,
+                        .RST(RSTCARRYIN) ,
+                        .CE(CECARRYIN) ,
+                        .D_out(CIN)) ;
+
+// Carry-out signals:
+// - CARRYOUT: cascade carry out from post-adder (registered if CARRYOUTREG=1, else direct).
+//   Connects only to CARRYIN of adjacent DSP48A1, leave unconnected if unused.
+// - CARRYOUTF: copy of CARRYOUT for general FPGA logic use (routable to user logic).
+
+pipeline_reg  #(.reg_size(1'b1) , 
+                .RSTTYPE(RSTTYPE) )
+
+        postAdd_result (.D_in(postAdd_out[47]) ,
+                        .SEL(CARRYOUTREG) ,
+                        .CLK(CLK) ,
+                        .RST(RSTCARRYIN) ,
+                        .CE(CECARRYIN) ,
+                        .D_out(CYO)) ;
+
+assign CARRYOUT = CYO ;
+assign CARRYOUTF = CYO ;
+
+
 
 endmodule
