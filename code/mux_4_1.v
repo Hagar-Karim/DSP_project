@@ -1,7 +1,7 @@
 module mux_4_1 #( parameter width = 8 )
 (
 input [width-1 : 0] in0 , in1 , in2 , in3 ,
-input sel ,
+input [1:0] sel ,
 output reg [width-1 : 0] out 
 ) ;
 

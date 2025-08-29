@@ -20,23 +20,21 @@ reg [reg_size-1:0] Reg_data;
 assign D_out = (SEL) ? Reg_data : D_in;
 
 generate
-    if (RSTTYPE) begin
-        if (RSTTYPE == 0) begin
-            always @(posedge CLK or posedge RST) begin
-                if (RST) 
-                    Reg_data <= 0;
-                else if (CE)
-                    Reg_data <= D_in;
-            end
-        end else begin
-            always @(posedge CLK) begin
-                if (RST)
-                    Reg_data <= 0;
-                else if (CE)
-                    Reg_data <= D_in;            
-            end
+    if (RSTTYPE == 0) begin : async_reset
+        always @(posedge CLK or posedge RST) begin
+            if (RST) 
+                Reg_data <= 0;
+            else if (CE)
+                Reg_data <= D_in;
         end
-    end 
+    end else begin : sync_reset
+        always @(posedge CLK) begin
+            if (RST)
+                Reg_data <= 0;
+            else if (CE)
+                Reg_data <= D_in;            
+        end
+    end
 endgenerate
 
 endmodule

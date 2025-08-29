@@ -6,6 +6,7 @@ module DSP_SLICE #(
         parameter CREG = 1'b1   ,             // for deciding either registered or not for input C
         parameter DREG = 1'b1   ,             // for deciding either registered or not for input D
         parameter MREG = 1'b1   ,              // for deciding either registered or not for multiplier output
+        parameter PREG = 1'b1   ,              // for deciding either registered or not for post adder output
         parameter CARRYINREG = 1'b1 ,          // for deciding either registered or not for carryin
         parameter CARRYOUTREG = 1'b1 ,          // for deciding either registered or not for carryout
         parameter CARRYINSEL =  1'b1
@@ -156,10 +157,10 @@ assign preAdd_in_d = d_out ;
 
 mux_4_1 #(.width(width_three)) 
 
-        X (.in0('b0) , 
+        X (.in0(0) , 
                .in1({ {12{M[35]}}, M } ) , 
                .in2(P) , 
-               .in3({d_out[11:0],B[17:0],A[17:0]}) , 
+               .in3($signed({d_out[11:0], A[17:0], B[17:0]})) , 
                .sel(OPMODE[1:0]) , 
                .out(postAdd_X)) ;
 
@@ -181,11 +182,11 @@ assign postAdd_out = (OPMODE[7]) ? (postAdd_Z - (postAdd_X + CIN)) : (postAdd_Z 
 pipeline_reg  #(.reg_size(width_three) , 
             .RSTTYPE(RSTTYPE) )
 
-        postAdd_result (.D_in(postAdd_out) ,
-               .SEL(DREG) ,
+        postAdd_result_P (.D_in(postAdd_out) ,
+               .SEL(PREG) ,
                .CLK(CLK) ,
-               .RST(RSTD) ,
-               .CE(CED) ,
+               .RST(RSTP) ,
+               .CE(CEP) ,
                .D_out(P)) ;
 
 assign PCOUT = P ;
@@ -199,7 +200,7 @@ assign CYI = (CARRYINSEL == OPMODE[5]) ? OPMODE[5] : CARRYIN ;
 pipeline_reg  #(.reg_size(1'b1) , 
                 .RSTTYPE(RSTTYPE) )
 
-        postAdd_result (.D_in(CYI) ,
+        postAdd_result_CIN (.D_in(CYI) ,
                         .SEL(CARRYINREG) ,
                         .CLK(CLK) ,
                         .RST(RSTCARRYIN) ,
@@ -214,7 +215,7 @@ pipeline_reg  #(.reg_size(1'b1) ,
 pipeline_reg  #(.reg_size(1'b1) , 
                 .RSTTYPE(RSTTYPE) )
 
-        postAdd_result (.D_in(postAdd_out[47]) ,
+        postAdd_result_COUT (.D_in(postAdd_out[47]) ,
                         .SEL(CARRYOUTREG) ,
                         .CLK(CLK) ,
                         .RST(RSTCARRYIN) ,
